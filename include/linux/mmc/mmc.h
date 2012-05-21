@@ -270,6 +270,10 @@ struct _mmc_csd {
  * EXT_CSD fields
  */
 
+#define EXT_CSD_FLUSH_CACHE		32      /* W */
+#define EXT_CSD_CACHE_CTRL		33      /* R/W */
+#define EXT_CSD_POWER_OFF_NOTIFICATION	34	/* R/W */
+#define EXT_CSD_GP_SIZE_MULT		143	/* R/W */
 #define EXT_CSD_PARTITION_ATTRIBUTE	156	/* R/W */
 #define EXT_CSD_PARTITION_SUPPORT	160	/* RO */
 #define EXT_CSD_WR_REL_PARAM		166	/* RO */
@@ -293,6 +297,13 @@ struct _mmc_csd {
 #define EXT_CSD_SEC_ERASE_MULT		230	/* RO */
 #define EXT_CSD_SEC_FEATURE_SUPPORT	231	/* RO */
 #define EXT_CSD_TRIM_MULT		232	/* RO */
+#define EXT_CSD_PWR_CL_200_195		236	/* RO */
+#define EXT_CSD_PWR_CL_200_360		237	/* RO */
+#define EXT_CSD_PWR_CL_DDR_52_195	238	/* RO */
+#define EXT_CSD_PWR_CL_DDR_52_360	239	/* RO */
+#define EXT_CSD_POWER_OFF_LONG_TIME	247	/* RO */
+#define EXT_CSD_GENERIC_CMD6_TIME	248	/* RO */
+#define EXT_CSD_CACHE_SIZE		249	/* RO, 4 bytes */
 
 /*
  * EXT_CSD field definitions
@@ -328,6 +339,18 @@ struct _mmc_csd {
 #define EXT_CSD_SEC_BD_BLK_EN	BIT(2)
 #define EXT_CSD_SEC_GB_CL_EN	BIT(4)
 
+#define EXT_CSD_RST_N_EN_MASK	0x3
+#define EXT_CSD_RST_N_ENABLED	1	/* RST_n is enabled on card */
+
+#define EXT_CSD_NO_POWER_NOTIFICATION	0
+#define EXT_CSD_POWER_ON		1
+#define EXT_CSD_POWER_OFF_SHORT		2
+#define EXT_CSD_POWER_OFF_LONG		3
+
+#define EXT_CSD_PWR_CL_8BIT_MASK	0xF0	/* 8 bit PWR CLS */
+#define EXT_CSD_PWR_CL_4BIT_MASK	0x0F	/* 8 bit PWR CLS */
+#define EXT_CSD_PWR_CL_8BIT_SHIFT	4
+#define EXT_CSD_PWR_CL_4BIT_SHIFT	0
 /*
  * MMC_SWITCH access modes
  */

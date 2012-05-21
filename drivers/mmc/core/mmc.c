@@ -259,7 +259,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	}
 
 	card->ext_csd.rev = ext_csd[EXT_CSD_REV];
-	if (card->ext_csd.rev > 5) {
+	if (card->ext_csd.rev > 6) {
 		printk(KERN_ERR "%s: unrecognised EXT_CSD revision %d\n",
 			mmc_hostname(card->host), card->ext_csd.rev);
 		err = -EINVAL;
@@ -344,7 +344,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	}
 
 	card->ext_csd.raw_hc_erase_gap_size =
-		ext_csd[EXT_CSD_PARTITION_ATTRIBUTE];
+		ext_csd[EXT_CSD_HC_WP_GRP_SIZE];
 	card->ext_csd.raw_sec_trim_mult =
 		ext_csd[EXT_CSD_SEC_TRIM_MULT];
 	card->ext_csd.raw_sec_erase_mult =
@@ -412,6 +412,20 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	else
 		card->erased_byte = 0x0;
 
+	if (card->ext_csd.rev >= 6) {
+		card->ext_csd.generic_cmd6_time = 10 *
+			ext_csd[EXT_CSD_GENERIC_CMD6_TIME];
+		card->ext_csd.power_off_longtime = 10 *
+			ext_csd[EXT_CSD_POWER_OFF_LONG_TIME];
+	} else
+		card->ext_csd.generic_cmd6_time = 0;
+
+	card->ext_csd.cache_size =
+		ext_csd[EXT_CSD_CACHE_SIZE + 0] << 0 |
+		ext_csd[EXT_CSD_CACHE_SIZE + 1] << 8 |
+		ext_csd[EXT_CSD_CACHE_SIZE + 2] << 16 |
+		ext_csd[EXT_CSD_CACHE_SIZE + 3] << 24;
+
 out:
 	return err;
 }
@@ -442,7 +456,7 @@ static int mmc_compare_ext_csds(struct mmc_card *card, unsigned bus_width)
 		goto out;
 
 	/* only compare read only fields */
-	err = (!(card->ext_csd.raw_partition_support ==
+	err = !((card->ext_csd.raw_partition_support ==
 			bw_ext_csd[EXT_CSD_PARTITION_SUPPORT]) &&
 		(card->ext_csd.raw_erased_mem_count ==
 			bw_ext_csd[EXT_CSD_ERASED_MEM_CONT]) &&
@@ -670,7 +684,8 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 */
 	if (card->ext_csd.enhanced_area_en) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				 EXT_CSD_ERASE_GROUP_DEF, 1, 0);
+				 EXT_CSD_ERASE_GROUP_DEF, 1,
+				 card->ext_csd.generic_cmd6_time);
 
 		if (err && err != -EBADMSG)
 			goto free_card;
@@ -708,12 +723,30 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	}
 
 	/*
+	 * If the host supports the power_off_notify capability then
+	 * set the notification byte in the ext_csd register of device
+	 */
+	if ((host->caps2 & MMC_CAP2_POWEROFF_NOTIFY) &&
+	    (card->ext_csd.rev >= 6)) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				 EXT_CSD_POWER_OFF_NOTIFICATION,
+				 EXT_CSD_POWER_ON,
+				 card->ext_csd.generic_cmd6_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+	}
+
+	if (!err)
+		card->poweroff_notify_state = MMC_POWERED_ON;
+
+	/*
 	 * Activate high speed (if supported)
 	 */
 	if ((card->ext_csd.hs_max_dtr != 0) &&
 		(host->caps & MMC_CAP_MMC_HIGHSPEED)) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				 EXT_CSD_HS_TIMING, 1, 0);
+				 EXT_CSD_HS_TIMING, 1,
+				 card->ext_csd.generic_cmd6_time);
 		if (err && err != -EBADMSG)
 			goto free_card;
 
@@ -785,7 +818,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 					 EXT_CSD_BUS_WIDTH,
 					 ext_csd_bits[idx][0],
-					 0);
+					 card->ext_csd.generic_cmd6_time);
 			if (!err) {
 				mmc_set_bus_width(card->host, bus_width);
 
@@ -808,7 +841,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 					 EXT_CSD_BUS_WIDTH,
 					 ext_csd_bits[idx][1],
-					 0);
+					 card->ext_csd.generic_cmd6_time);
 		}
 		if (err) {
 			printk(KERN_WARNING "%s: switch to bus width %d ddr %d "
@@ -839,6 +872,32 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			mmc_card_set_ddr_mode(card);
 			mmc_set_timing(card->host, MMC_TIMING_UHS_DDR50);
 			mmc_set_bus_width(card->host, bus_width);
+		}
+	}
+
+	/*
+	 * If cache size is higher than 0, this indicates
+	 * the existence of cache and it can be turned on.
+	 */
+	if ((host->caps2 & MMC_CAP2_CACHE_CTRL) &&
+			card->ext_csd.cache_size > 0) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				EXT_CSD_CACHE_CTRL, 1,
+				card->ext_csd.generic_cmd6_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+
+		/*
+		 * Only if no error, cache is turned on successfully.
+		 */
+		if (err) {
+			pr_warning("%s: Cache is supported, "
+					"but failed to turn on (%d)\n",
+					mmc_hostname(card->host), err);
+			card->ext_csd.cache_ctrl = 0;
+			err = 0;
+		} else {
+			card->ext_csd.cache_ctrl = 1;
 		}
 	}
 
