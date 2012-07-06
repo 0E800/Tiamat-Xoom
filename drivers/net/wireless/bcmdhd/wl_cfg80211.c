@@ -72,6 +72,7 @@ u32 wl_dbg_level = WL_DBG_ERR;
 #define WL_SCAN_ACTIVE_TIME	 40
 #define WL_SCAN_PASSIVE_TIME	130
 #define WL_FRAME_LEN			300
+#define WL_SCAN_BUSY_MAX	8
 
 #define DNGL_FUNC(func, parameters) func parameters;
 #define COEX_DHCP
@@ -1737,6 +1738,13 @@ wl_cfg80211_scan(struct wiphy *wiphy, struct net_device *ndev,
 	err = __wl_cfg80211_scan(wiphy, ndev, request, NULL);
 	if (unlikely(err)) {
 		WL_ERR(("scan error (%d)\n", err));
+		if (err == BCME_BUSY) {
+			wl->scan_busy_count++;
+			if (wl->scan_busy_count > WL_SCAN_BUSY_MAX) {
+				wl->scan_busy_count = 0;
+				net_os_send_hang_message(ndev);
+			}
+		}
 		return err;
 	}
 
@@ -4709,7 +4717,7 @@ static s32 wl_inform_single_bss(struct wl_priv *wl, struct wl_bss_info *bi)
 #endif
 	channel = ieee80211_get_channel(wiphy, freq);
 	if (!channel) {
-		WL_ERR(("No valid channel"));
+		WL_ERR(("No valid channel: %u\n", freq));
 		kfree(notif_bss_info);
 		return -EINVAL;
 	}
@@ -6004,6 +6012,7 @@ static void wl_notify_iscan_complete(struct wl_iscan_ctrl *iscan, bool aborted)
 	unsigned long flags;
 
 	WL_DBG(("Enter \n"));
+	wl->scan_busy_count = 0;
 	if (!wl_get_drv_status(wl, SCANNING, ndev)) {
 		wl_clr_drv_status(wl, SCANNING, ndev);
 		WL_ERR(("Scan complete while device not scanning\n"));
@@ -6258,6 +6267,7 @@ static s32 wl_notify_escan_complete(struct wl_priv *wl,
 
 	WL_DBG(("Enter \n"));
 
+	wl->scan_busy_count = 0;
 	if (wl->scan_request) {
 		if (wl->scan_request->dev == wl->p2p_net)
 			dev = wl_to_prmry_ndev(wl);
@@ -7168,11 +7178,16 @@ s32 wl_update_wiphybands(struct wl_priv *wl)
 		}
 	}
 
+#if 0
 	err = wl_construct_reginfo(wl, bw_cap);
 	if (err) {
 		WL_ERR(("wl_construct_reginfo() fails err=%d\n", err));
-		return err;
+		if (err != BCME_UNSUPPORTED)
+			return err;
+		/* Ignore error if "chanspecs" command is not supported */
+		err = 0;
 	}
+#endif
 	for (i = 1; i <= nband && i < sizeof(bandlist)/sizeof(u32); i++) {
 		index = -1;
 		if (bandlist[i] == WLC_BAND_5G && __wl_band_5ghz_a.n_channels > 0) {
